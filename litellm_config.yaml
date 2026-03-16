@@ -1,96 +1,69 @@
 # =============================================================================
 # Alkemio Claude Code Router — LiteLLM Proxy Config
 # =============================================================================
-# Aligned with: Alkemio AI Inference Hosting Policy (February 2026)
 #
-# Tier 1: Company-owned hardware (vLLM/Ollama on RTX PRO 6000 / DGX Spark)
-# Tier 2: EU-hosted open-weight model APIs (Scaleway AI, Mistral)
-# Tier 3: Commercial coding tools (Claude Code Max, Alibaba Coding Plan)
+# Two active pools:
+#   claude — Anthropic (frontier, complex reasoning)
+#   qwen   — Alibaba DashScope (cost-optimised, routine tasks)
 #
-# Authentication:
-#   Claude Max  → OAuth (browser login), forwarded by LiteLLM
-#   Alibaba     → Coding Plan key (sk-sp-xxx), Anthropic-compatible endpoint
+# Optional local pools (uncomment when self-hosted hardware is available):
+#   local-primary  — vLLM on RTX PRO 6000
+#   local-fallback — DGX Spark
+#
+# Authentication (both use coding subscriptions):
+#   Claude  → Claude Code Max subscription, OAuth token forwarded by LiteLLM
+#   Alibaba → DashScope Coding Plan subscription (sk-sp-xxx token)
 #
 # Usage:
 #   docker compose up -d
-#   export ANTHROPIC_BASE_URL=http://localhost:4000
-#   export ANTHROPIC_CUSTOM_HEADERS="x-litellm-api-key: Bearer $LITELLM_MASTER_KEY"
-#   claude    # choose "Claude account with subscription" on first run
+#   export ANTHROPIC_BASE_URL=http://localhost:4891
+#   claude
 # =============================================================================
 
 model_list:
   # ---------------------------------------------------------------------------
-  # TIER 3: Claude Code Max Subscription (OAuth, no API key)
+  # Claude (Anthropic) — frontier model, Claude Code Max subscription
   # ---------------------------------------------------------------------------
   # Interactive coding, complex reasoning, agentic workflows.
-  # Scoped exception per Section 5.3: code only, no user data.
-  #
-  # No api_key — OAuth token forwarded from Claude Code's browser login.
-  - model_name: tier3-claude
+  # Auth: OAuth token from Claude Code's browser login, forwarded by LiteLLM.
+  - model_name: claude
     litellm_params:
       model: anthropic/claude-sonnet-4-20250514
 
   # ---------------------------------------------------------------------------
-  # TIER 3 (cost tier): Alibaba Model Studio Coding Plan
+  # Qwen (Alibaba DashScope) — cost-optimised, DashScope Coding Plan
   # ---------------------------------------------------------------------------
-  # Same Tier 3 scoped exception: code only, no user data.
-  # Uses the Anthropic-compatible endpoint — no API format translation needed.
-  #
-  # Coding Plan base URL (sk-sp-xxx key):
-  #   https://coding-intl.dashscope.aliyuncs.com/apps/anthropic
-  #
-  # Coding Plan TOS restrict usage to interactive coding tools (Claude Code, etc.).
-  # Running LiteLLM locally as a transparent proxy is fine — Alibaba sees the
-  # same IP and request format as a direct Claude Code call.
-  - model_name: tier3-alibaba
+  # Routine tasks: infra, client work, batch operations, project management.
+  # Auth: Coding Plan token (sk-sp-xxx). Anthropic-compatible endpoint.
+  - model_name: qwen
     litellm_params:
-      model: anthropic/qwen3-coder-plus
-      api_base: os.environ/DASHSCOPE_BASE_URL
-      api_key: os.environ/DASHSCOPE_API_KEY
+      model: anthropic/qwen3.5-plus
+      api_base: https://coding-intl.dashscope.aliyuncs.com/apps/anthropic
+      api_key: os.environ/DASHSCOPE_AUTH_TOKEN
 
   # ---------------------------------------------------------------------------
-  # TIER 1: Company-Owned Inference Hardware (Phase 1: Q1 2026)
+  # Local — self-hosted hardware (uncomment when deployed)
   # ---------------------------------------------------------------------------
-  # Primary workstation: vLLM on RTX PRO 6000 GPUs (2-3 initially)
+  # Primary workstation: vLLM on RTX PRO 6000 GPUs
   # Models: European preferred (Mistral), then open-weight (Qwen, Llama)
   #
-  # Serves: batch coding (refactoring, test gen, migrations), internal ops,
-  # Platform AI workloads. Complete data sovereignty.
-  #
-  # Uncomment when hardware is deployed.
-  #
-  # - model_name: tier1-primary
+  # - model_name: local-primary
   #   litellm_params:
-  #     model: anthropic/mistral-large     # or openai/ prefix depending on vLLM config
+  #     model: anthropic/mistral-large
   #     api_base: http://workstation.local:8000/v1
   #     api_key: none
   #   model_info:
-  #     id: tier1-vllm-primary
+  #     id: local-vllm-primary
   #
-  # DGX Spark fallback (Section 7.2): ~38 tok/s, preserves sovereignty.
+  # DGX Spark fallback (~38 tok/s):
   #
-  # - model_name: tier1-fallback
+  # - model_name: local-fallback
   #   litellm_params:
   #     model: openai/mistral-large
   #     api_base: http://dgx-spark.local:8000/v1
   #     api_key: none
   #   model_info:
-  #     id: tier1-dgx-spark
-
-  # ---------------------------------------------------------------------------
-  # TIER 2: EU-Hosted Open-Weight APIs (Phase 2: Q2 2026)
-  # ---------------------------------------------------------------------------
-  # EU-headquartered, EU-only data processing, no US affiliation.
-  # Per Section 7.1: "last resort, not a routine fallback."
-  #
-  # Uncomment when provider contracts are established.
-  #
-  # - model_name: tier2-eu
-  #   litellm_params:
-  #     model: mistral/mistral-large-latest
-  #     api_key: os.environ/MISTRAL_API_KEY
-  #   model_info:
-  #     id: tier2-mistral
+  #     id: local-dgx-spark
 
 general_settings:
   # Forward Claude Code's OAuth token to Anthropic (Max subscription).
@@ -105,11 +78,10 @@ router_settings:
   num_retries: 2
   timeout: 120
   fallbacks:
-    - tier3-alibaba: ["tier3-claude"]
-    # Uncomment as tiers come online:
-    # - tier1-primary: ["tier1-fallback", "tier2-eu", "tier3-claude"]
-    # - tier1-fallback: ["tier2-eu", "tier3-claude"]
-    # - tier2-eu: ["tier3-claude"]
+    - qwen: ["claude"]
+    # Uncomment when local hardware is available:
+    # - local-primary: ["local-fallback", "claude"]
+    # - local-fallback: ["claude"]
 
 litellm_settings:
   master_key: os.environ/LITELLM_MASTER_KEY

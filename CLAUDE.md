@@ -2,39 +2,53 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Overview
-
-Routes Claude Code requests across Alkemio's tiered AI inference architecture using LiteLLM as a proxy. Routes based on MCP tool namespaces, repo paths, and content patterns.
-
-## Commands
+## Development Setup
 
 ```bash
-# Start the proxy
+# Install and start
 docker compose up -d
 
-# View logs (debugging routing decisions)
+# View routing logs
 docker compose logs -f litellm
 
 # Restart after config changes
 docker compose restart litellm
 ```
 
-## Architecture
+Set in your shell profile:
+```bash
+export ANTHROPIC_BASE_URL=http://localhost:4891
+```
 
-**Key files:**
-- `litellm_config.yaml` — defines model pools (tier3-claude, tier3-alibaba, etc.) and fallback chains
-- `task_router.py` — routing rules evaluated by priority (lower = first); first match wins
-- `docker-compose.yml` — runs LiteLLM proxy with custom routing strategy
+## How Routing Works
 
-**Routing signals (in priority order):**
-1. MCP tool namespaces (e.g., `scaleway`, `ory_kratos`, `github`)
-2. Repository path (regex match on system prompt)
-3. Content patterns (regex on last user message)
+The proxy routes requests to different model pools based on:
 
-**Current state (Phase 1):** Only Tier 3 pools active. Tier 1 (company hardware) and Tier 2 (EU APIs) are commented out, to be enabled when deployed.
+1. **MCP namespaces** — tools like `scaleway`, `ory_kratos`, `github`
+2. **Repo path** — e.g., `alkemio/server` vs `alkemio/client`
+3. **Content patterns** — e.g., "generate tests", "refactor"
 
-**Adding a provider:**
-1. Add to `model_list` in `litellm_config.yaml`
-2. Reference pool name in `task_router.py` routing rules
-3. Add fallback chain in `router_settings.fallbacks`
-4. `docker compose restart litellm`
+Rules are in `task_router.py`, evaluated by priority (lower = first). First match wins.
+
+## Active Routing Rules
+
+| Rule | Signal | Model |
+|------|--------|-------|
+| infra-scaleway | MCP: `scaleway` | qwen3.5-plus |
+| identity-ory | MCP: `ory_kratos`, `ory_hydra` | qwen3.5-plus |
+| project-management | MCP: `github`, `gitlab` | qwen3.5-plus |
+| kubernetes | MCP: `kubernetes` | qwen3.5-plus |
+| alkemio-server-core | Repo: `alkemio/server` | claude-sonnet-4 |
+| alkemio-client | Repo: `alkemio/client`, `alkemio/web` | qwen3.5-plus |
+| alkemio-infra | Repo: `alkemio/infra`, `terraform`, `k8s` | qwen3.5-plus |
+| alkemio-tooling | Repo: `alkemio/mcp`, `mcp-ory-kratos` | qwen3.5-plus |
+| batch-test-generation | Content: "generate tests" | qwen3.5-plus |
+| batch-refactoring | Content: "refactor", "migrate" | qwen3.5-plus |
+| batch-documentation | Content: "generate jsdoc" | qwen3.5-plus |
+| (default) | No match | claude-sonnet-4 |
+
+## Configuration Files
+
+- `litellm_config.yaml` — model pools and fallback chains
+- `task_router.py` — routing rules and logic
+- `.env` — API keys (copy from `.env.example`)

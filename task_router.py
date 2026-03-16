@@ -1,28 +1,15 @@
 """
-Task-Aware Router for Alkemio Claude Code → LiteLLM Proxy
-============================================================
+Task-Aware Router for Alkemio Claude Code
+==========================================
 
-Aligned with: Alkemio AI Inference Hosting Policy (February 2026)
+Routes Claude Code requests to different model pools based on the nature
+of the task, optimising cost by sending routine work to cheaper models
+and reserving frontier models for complex reasoning.
 
-Routes requests across the three-tier inference architecture:
-
-  Tier 1 — Company-owned hardware (vLLM on RTX PRO 6000 / DGX Spark)
-           For: batch coding, internal ops, Platform AI
-  Tier 2 — EU-hosted open-weight APIs (Scaleway AI, Mistral)
-           For: overflow / emergency failover only
-  Tier 3 — Commercial coding tools (Claude Code, Alibaba)
-           For: interactive coding (scoped exception: code only, no user data)
-
-Routing signals:
+Routing signals (evaluated in priority order, first match wins):
   1. MCP tool namespaces — extracted from the tools array
   2. Repository path — extracted from Claude Code's system prompt
-  3. Content patterns — optional regex on the last user message
-
-The policy states (Section 5.3):
-  - "Well-defined batch coding tasks (automated refactoring, test generation,
-    large-scale migrations) are routed to Tier 1 local hardware"
-  - Interactive coding requiring frontier model capability stays on Tier 3
-  - No user data is ever processed through Tier 3
+  3. Content patterns — regex on the last user message
 
 Usage:
   Referenced by litellm_config.yaml via:
@@ -46,24 +33,17 @@ logger.setLevel(logging.INFO)
 # POOL CONFIGURATION
 # =============================================================================
 # Pool names must match model_name values in litellm_config.yaml.
-# As tiers come online, update these and uncomment the corresponding
-# model_list entries in litellm_config.yaml.
 
-# Tier 1 pools (uncomment when hardware is deployed — Phase 1, Q1 2026)
-# TIER1_PRIMARY = "tier1-primary"
-# TIER1_FALLBACK = "tier1-fallback"
+# Local pools (uncomment when self-hosted hardware is deployed)
+# LOCAL_PRIMARY = "local-primary"
+# LOCAL_FALLBACK = "local-fallback"
 
-# Tier 2 pool (uncomment when EU provider contracts are live — Phase 2, Q2 2026)
-# TIER2_EU = "tier2-eu"
-
-# Tier 3 pools (active now)
-TIER3_CLAUDE = "tier3-claude"       # Anthropic — frontier interactive coding
-TIER3_ALIBABA = "tier3-alibaba"     # DashScope — cost-optimised routine coding
+# Cloud pools (active now)
+CLAUDE = "claude"       # Anthropic — frontier interactive coding
+QWEN = "qwen"           # Alibaba DashScope — cost-optimised routine coding
 
 # Default pool: where requests go when no rule matches.
-# Currently Tier 3 Claude (interactive coding is the primary Claude Code use case).
-# When Tier 1 is live, batch/internal tasks will route there instead.
-DEFAULT_POOL = TIER3_CLAUDE
+DEFAULT_POOL = CLAUDE
 
 
 # =============================================================================
@@ -89,14 +69,13 @@ class RoutingRule:
 # fmt: off
 ROUTING_RULES: list[RoutingRule] = [
     # =========================================================================
-    # TIER 1 RULES — uncomment when hardware is deployed
+    # LOCAL RULES — uncomment when self-hosted hardware is deployed
     # =========================================================================
-    # Per policy Section 5.1: batch coding tasks with well-defined scope
-    # (refactoring, test generation, documentation, migrations) go to Tier 1.
+    # Batch coding tasks with well-defined scope go to local hardware.
     #
     # RoutingRule(
-    #     name="batch-coding-test-gen",
-    #     pool=TIER1_PRIMARY,
+    #     name="batch-coding-local",
+    #     pool=LOCAL_PRIMARY,
     #     priority=5,
     #     content_patterns=[
     #         r"(?:generate|write|create)\s+(?:unit\s+)?tests?\b",
@@ -104,40 +83,31 @@ ROUTING_RULES: list[RoutingRule] = [
     #         r"(?:generate|write)\s+(?:jsdoc|documentation|docs)\b",
     #     ],
     # ),
-    # RoutingRule(
-    #     name="platform-ai",
-    #     pool=TIER1_PRIMARY,
-    #     priority=5,
-    #     mcp_namespaces=["alkemio_platform"],
-    #     repo_patterns=[r"alkemio[/\\]platform-ai", r"alkemio[/\\]virtual-contributor"],
-    # ),
 
     # =========================================================================
-    # MCP-NAMESPACE RULES — route infra/identity/PM tasks to cost tier
+    # MCP-NAMESPACE RULES — route infra/identity/PM tasks to cost pool
     # =========================================================================
-    # These are routine operational tasks on Alkemio's open-source codebase.
-    # Per policy Section 5.3 scoped exception: code only, no user data.
     RoutingRule(
         name="infra-scaleway",
-        pool=TIER3_ALIBABA,
+        pool=QWEN,
         priority=10,
         mcp_namespaces=["scaleway"],
     ),
     RoutingRule(
         name="identity-ory",
-        pool=TIER3_ALIBABA,
+        pool=QWEN,
         priority=10,
         mcp_namespaces=["ory_kratos", "ory_hydra", "ory"],
     ),
     RoutingRule(
         name="project-management",
-        pool=TIER3_ALIBABA,
+        pool=QWEN,
         priority=10,
         mcp_namespaces=["github", "gitlab", "linear", "jira"],
     ),
     RoutingRule(
         name="kubernetes",
-        pool=TIER3_ALIBABA,
+        pool=QWEN,
         priority=10,
         mcp_namespaces=["kubernetes"],
     ),
@@ -148,21 +118,21 @@ ROUTING_RULES: list[RoutingRule] = [
     # Core platform server: complex reasoning needed → Claude (frontier)
     RoutingRule(
         name="alkemio-server-core",
-        pool=TIER3_CLAUDE,
+        pool=CLAUDE,
         priority=50,
         repo_patterns=[r"alkemio[/\\]server"],
     ),
-    # Client / frontend: routine → cost tier
+    # Client / frontend: routine → cost pool
     RoutingRule(
         name="alkemio-client",
-        pool=TIER3_ALIBABA,
+        pool=QWEN,
         priority=50,
         repo_patterns=[r"alkemio[/\\]client", r"alkemio[/\\]web"],
     ),
-    # Infrastructure repos: routine → cost tier
+    # Infrastructure repos: routine → cost pool
     RoutingRule(
         name="alkemio-infra",
-        pool=TIER3_ALIBABA,
+        pool=QWEN,
         priority=50,
         repo_patterns=[
             r"alkemio[/\\]infra",
@@ -172,10 +142,10 @@ ROUTING_RULES: list[RoutingRule] = [
             r"alkemio[/\\](?:docker|deploy)",
         ],
     ),
-    # MCP servers, tooling repos: routine → cost tier
+    # MCP servers, tooling repos: routine → cost pool
     RoutingRule(
         name="alkemio-tooling",
-        pool=TIER3_ALIBABA,
+        pool=QWEN,
         priority=50,
         repo_patterns=[
             r"alkemio[/\\]mcp",
@@ -186,7 +156,7 @@ ROUTING_RULES: list[RoutingRule] = [
     # Personal / sandbox projects
     RoutingRule(
         name="personal-projects",
-        pool=TIER3_ALIBABA,
+        pool=QWEN,
         priority=60,
         repo_patterns=[r"personal[/\\]", r"sandbox[/\\]", r"experiments[/\\]"],
     ),
@@ -194,15 +164,10 @@ ROUTING_RULES: list[RoutingRule] = [
     # =========================================================================
     # CONTENT-BASED RULES (lower priority, checked last)
     # =========================================================================
-    # Batch coding tasks per policy Section 5.3 mitigations:
-    # "Well-defined batch coding tasks are routed to Tier 1 local hardware
-    # to reduce both cost and dependency."
-    #
-    # Currently routes to Alibaba (cost tier) until Tier 1 hardware is live.
-    # When Tier 1 is deployed, change pool to TIER1_PRIMARY.
+    # Batch coding tasks: route to cost pool (or local when available).
     RoutingRule(
         name="batch-test-generation",
-        pool=TIER3_ALIBABA,
+        pool=QWEN,
         priority=70,
         content_patterns=[
             r"(?:generate|write|create)\s+(?:unit\s+)?tests?\b",
@@ -211,7 +176,7 @@ ROUTING_RULES: list[RoutingRule] = [
     ),
     RoutingRule(
         name="batch-refactoring",
-        pool=TIER3_ALIBABA,
+        pool=QWEN,
         priority=70,
         content_patterns=[
             r"(?:refactor|migrate|convert|rename)\s+(?:all|every|each)\b",
@@ -220,7 +185,7 @@ ROUTING_RULES: list[RoutingRule] = [
     ),
     RoutingRule(
         name="batch-documentation",
-        pool=TIER3_ALIBABA,
+        pool=QWEN,
         priority=70,
         content_patterns=[
             r"(?:generate|write|add)\s+(?:jsdoc|tsdoc|docstring|documentation)\b",
@@ -313,7 +278,7 @@ def extract_last_user_message(messages: list[dict]) -> str:
 
 class TaskAwareRouter(CustomRoutingStrategyBase):
     """
-    Routes Claude Code requests across Alkemio's tiered inference architecture.
+    Routes Claude Code requests to model pools based on task type.
 
     Evaluates routing rules by priority (lower = first). First match wins.
     If no rule matches, routes to DEFAULT_POOL.

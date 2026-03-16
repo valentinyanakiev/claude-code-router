@@ -2,7 +2,7 @@ services:
   litellm:
     image: ghcr.io/berriai/litellm:main-stable
     ports:
-      - "${LITELLM_PORT:-4000}:4000"
+      - "${LITELLM_PORT:-4891}:4000"
     volumes:
       - ./litellm_config.yaml:/app/config.yaml
       - ./task_router.py:/app/task_router.py
